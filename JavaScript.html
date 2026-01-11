@@ -1,0 +1,280 @@
+<script>
+  var currentTeam = '';
+  var teamMembers = [];
+  var currentJobs = [];
+  var myModal;
+
+  // --- Login System ---
+  function doLogin() {
+    const team = document.getElementById('login-team').value;
+    const pass = document.getElementById('login-pass').value;
+    
+    // Show loading
+    Swal.fire({title: 'Logging in...', didOpen: () => Swal.showLoading()});
+
+    google.script.run.withSuccessHandler(res => {
+      Swal.close();
+      if (res.success) {
+        currentTeam = res.team;
+        teamMembers = res.members || [];
+        
+        // Setup UI
+        document.getElementById('login-page').style.display = 'none';
+        
+        if(currentTeam === 'ADMIN'){
+           setupTVDashboard();
+        } else {
+           setupUserDashboard();
+        }
+      } else {
+        Swal.fire('Error', 'Incorrect Passcode', 'error');
+      }
+    }).loginUser(team, pass);
+  }
+
+  function logout(){
+    location.reload();
+  }
+
+  // --- User Dashboard ---
+  function setupUserDashboard(){
+    document.getElementById('app-page').style.display = 'block';
+    document.getElementById('nav-team-name').innerText = 'Team: ' + currentTeam;
+    loadJobs();
+    
+    // Setup Supervisor Dropdown
+    const sel = document.getElementById('supervisor');
+    sel.innerHTML = '';
+    teamMembers.forEach(m => {
+       sel.innerHTML += `<option value="${m}">${m}</option>`;
+    });
+  }
+
+  function loadJobs(){
+    google.script.run.withSuccessHandler(renderJobs).getJobs(currentTeam);
+  }
+
+  function renderJobs(jobs){
+    currentJobs = jobs; // store for edit
+    const container = document.getElementById('job-list-container');
+    container.innerHTML = '';
+    
+    let countProg = 0;
+    let countComp = 0;
+
+    jobs.forEach(job => {
+      if(job.Status === 'Completed') countComp++; else countProg++;
+      
+      // Check Logic: No WO -> Red Border
+      const isNoWO = !job.WO_Number;
+      const cardClass = isNoWO && job.Status !== 'Completed' ? 'card-job no-wo' : 'card-job';
+      const badgeClass = job.Status === 'Completed' ? 'bg-success' : 'bg-warning text-dark';
+      
+      const html = `
+        <div class="col-12 col-md-6 col-lg-4">
+          <div class="${cardClass} card shadow-sm h-100" onclick="editJob('${job.Job_ID}')">
+            <div class="card-body">
+               <div class="d-flex justify-content-between">
+                 <h6 class="fw-bold">${job.Description}</h6>
+                 <span class="badge ${badgeClass}">${job.Status}</span>
+               </div>
+               <div class="small text-muted mt-2">
+                 <i class="bi bi-person"></i> ${job.Supervisor} | 
+                 <i class="bi bi-upc"></i> ${job.WO_Number || '<span class="text-danger">No WO</span>'}
+               </div>
+               <div class="small text-muted">
+                 <i class="bi bi-gear"></i> ${job.Contractor_Name} (${job.Contractor_Type})
+               </div>
+               <div class="mt-2" style="font-size:0.8rem">
+                 Time: ${job.Plan_Start} - ${job.Plan_Finish}
+                 ${job.Actual_Finish ? `<br><strong class="text-success">Done: ${job.Actual_Finish}</strong>` : ''}
+               </div>
+            </div>
+          </div>
+        </div>
+      `;
+      container.innerHTML += html;
+    });
+
+    document.getElementById('count-progress').innerText = countProg;
+    document.getElementById('count-completed').innerText = countComp;
+  }
+
+  // --- Modal Logic & Button State ---
+  
+  // เรียกใช้เมื่อเปิด Modal
+  function openModal(jobId = null) {
+    myModal = new bootstrap.Modal(document.getElementById('jobModal'));
+    const form = document.getElementById('jobForm');
+    
+    // Reset State
+    document.getElementById('close-job-section').style.display = 'none';
+    document.getElementById('wo-warning').style.display = 'none';
+    
+    if(!jobId){
+      // NEW JOB
+      form.reset();
+      document.getElementById('jobId').value = "";
+      document.getElementById('modalTitle').innerText = "Create New Job";
+      // Set Default Time
+      document.getElementById('planStart').value = "08:00";
+      document.getElementById('planFinish').value = "17:00";
+      updateButtonState(); // Check WO Empty
+    } else {
+      // EDIT JOB
+      const job = currentJobs.find(j => j.Job_ID == jobId);
+      if(!job) return;
+      
+      document.getElementById('jobId').value = job.Job_ID;
+      document.getElementById('modalTitle').innerText = "Update / Close Job";
+      document.getElementById('supervisor').value = job.Supervisor;
+      document.getElementById('woNumber').value = job.WO_Number;
+      document.getElementById('description').value = job.Description;
+      document.getElementById('contractorType').value = job.Contractor_Type;
+      document.getElementById('contractorName').value = job.Contractor_Name;
+      document.getElementById('planStart').value = job.Plan_Start;
+      document.getElementById('planFinish').value = job.Plan_Finish;
+      
+      // Logic: Show Confirm Button if not completed
+      if(job.Status !== 'Completed'){
+         // เตรียมปิดงาน
+         document.getElementById('close-job-section').style.display = 'block';
+         document.getElementById('btn-action').className = "btn btn-success";
+         document.getElementById('btn-action').innerText = "Confirm Completed";
+      } else {
+         // งานจบแล้ว ดูได้อย่างเดียว
+         document.getElementById('btn-action').innerText = "Update Info";
+      }
+    }
+    
+    myModal.show();
+  }
+
+  // Logic ปุ่มเปลี่ยนตามช่อง WO (Real-time)
+  document.getElementById('woNumber').addEventListener('keyup', updateButtonState);
+
+  function updateButtonState(){
+    // ทำงานเฉพาะตอนเปิดงานใหม่ (ไม่มี Job ID)
+    if(document.getElementById('jobId').value !== "") return;
+
+    const wo = document.getElementById('woNumber').value;
+    const btn = document.getElementById('btn-action');
+    const warning = document.getElementById('wo-warning');
+
+    if(wo.trim() === ""){
+       btn.className = "btn btn-secondary"; // สีเทา
+       btn.innerText = "Create WO & Dashboard";
+       warning.style.display = 'block';
+    } else {
+       btn.className = "btn btn-primary"; // สีน้ำเงินปกติ
+       btn.innerText = "Save & Dashboard";
+       warning.style.display = 'none';
+    }
+  }
+
+  function submitJob(){
+    const jobId = document.getElementById('jobId').value;
+    const wo = document.getElementById('woNumber').value;
+    const desc = document.getElementById('description').value;
+    
+    if(!desc) { Swal.fire('Alert','Please enter description','warning'); return; }
+
+    const formData = {
+       jobId: jobId,
+       team: currentTeam,
+       supervisor: document.getElementById('supervisor').value,
+       woNumber: wo,
+       description: desc,
+       contractorType: document.getElementById('contractorType').value,
+       contractorName: document.getElementById('contractorName').value,
+       planStart: document.getElementById('planStart').value,
+       planFinish: document.getElementById('planFinish').value,
+       status: 'In Progress', // Default
+       actualFinish: ""
+    };
+
+    // ถ้าเป็นการปิดงาน (มี Job ID และส่วน Close แสดงอยู่)
+    const isClosing = document.getElementById('close-job-section').style.display !== 'none';
+    
+    if(jobId && isClosing){
+       const actTime = document.getElementById('actualFinish').value;
+       if(!actTime && document.getElementById('btn-action').innerText.includes("Confirm")){
+          Swal.fire('Required','Please enter Actual Finish Time','warning');
+          return;
+       }
+       formData.status = 'Completed';
+       formData.actualFinish = actTime;
+    }
+
+    // Send to Server
+    const btn = document.getElementById('btn-action');
+    const orgText = btn.innerText;
+    btn.innerText = "Saving...";
+    btn.disabled = true;
+
+    google.script.run.withSuccessHandler(res => {
+       btn.disabled = false;
+       btn.innerText = orgText;
+       if(res.success){
+          myModal.hide();
+          Swal.fire({
+             icon: 'success',
+             title: 'Saved!',
+             toast: true,
+             position: 'top-end',
+             showConfirmButton: false,
+             timer: 1500
+          });
+          loadJobs(); // Refresh List
+       } else {
+          Swal.fire('Error', res.error, 'error');
+       }
+    }).saveJob(formData);
+  }
+
+  // --- TV Dashboard (Admin) ---
+  function setupTVDashboard(){
+    document.getElementById('tv-page').style.display = 'block';
+    refreshTV();
+    // Auto Refresh every 30 seconds
+    setInterval(refreshTV, 30000);
+  }
+
+  function refreshTV(){
+     google.script.run.withSuccessHandler(renderTV).getJobs('ADMIN');
+  }
+
+  function renderTV(jobs){
+     // Filter by Team and Render Table
+     renderTeamTable(jobs, 'ME1', 'tv-list-me1');
+     renderTeamTable(jobs, 'ME2', 'tv-list-me2');
+     renderTeamTable(jobs, 'ME3', 'tv-list-me3');
+     // Admin/Overview (แสดงงานทั้งหมดที่ยังไม่เสร็จ หรืองานเสร็จวันนี้)
+     renderTeamTable(jobs, 'ADMIN', 'tv-list-admin'); 
+  }
+
+  function renderTeamTable(allJobs, teamFilter, divId){
+     const container = document.getElementById(divId);
+     const filtered = teamFilter === 'ADMIN' ? allJobs : allJobs.filter(j => j.Team === teamFilter);
+     
+     if(filtered.length === 0) {
+        container.innerHTML = '<p class="text-muted text-center">No active jobs</p>';
+        return;
+     }
+
+     let html = '<table class="table table-sm table-striped" style="font-size:0.85rem">';
+     html += '<thead><tr><th>Desc</th><th>Contr.</th><th>Status</th></tr></thead><tbody>';
+     
+     filtered.forEach(j => {
+        // Show max 5-6 items per screen to fit TV
+        let statusColor = j.Status === 'Completed' ? 'text-success' : 'text-warning';
+        html += `<tr>
+           <td>${j.Description} ${!j.WO_Number ? '<span class="text-danger fw-bold">(!)</span>' : ''}</td>
+           <td>${j.Contractor_Name}</td>
+           <td class="${statusColor}">${j.Status}</td>
+        </tr>`;
+     });
+     html += '</tbody></table>';
+     container.innerHTML = html;
+  }
+</script>
