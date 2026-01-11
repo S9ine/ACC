@@ -4,50 +4,59 @@
   var currentJobs = [];
   var myModal;
 
-  // --- Login System ---
+  document.addEventListener("DOMContentLoaded", function() {
+    if (typeof bootstrap === 'undefined') {
+       Swal.fire('Error', 'Bootstrap ไม่ทำงาน! กรุณากด Deploy > New Deployment', 'error');
+    }
+    loadTeamList();
+    const today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const dateEl = document.getElementById('todayDate');
+    if(dateEl) dateEl.innerText = "Date: " + today;
+  });
+
+  function loadTeamList() {
+    google.script.run.withSuccessHandler(updateTeamDropdown).getTeamList();
+  }
+
+  function updateTeamDropdown(teams) {
+    const select = document.getElementById('login-team');
+    if(!select) return;
+    select.innerHTML = '<option value="" disabled selected>Select Team...</option>';
+    teams.forEach(team => {
+       if(team !== 'ADMIN'){ 
+         let opt = document.createElement("option"); opt.value = team; opt.text = team; select.appendChild(opt); 
+       }
+    });
+    let adminOpt = document.createElement("option"); adminOpt.value = 'ADMIN'; adminOpt.text = 'ADMIN (Monitor)'; select.appendChild(adminOpt);
+  }
+
   function doLogin() {
     const team = document.getElementById('login-team').value;
     const pass = document.getElementById('login-pass').value;
-    
-    // Show loading
+    if(!team) { Swal.fire('Error', 'Please select a team', 'warning'); return; }
     Swal.fire({title: 'Logging in...', didOpen: () => Swal.showLoading()});
-
     google.script.run.withSuccessHandler(res => {
       Swal.close();
       if (res.success) {
         currentTeam = res.team;
         teamMembers = res.members || [];
-        
-        // Setup UI
         document.getElementById('login-page').style.display = 'none';
-        
-        if(currentTeam === 'ADMIN'){
-           setupTVDashboard();
-        } else {
-           setupUserDashboard();
-        }
+        if(currentTeam === 'ADMIN'){ setupTVDashboard(); } else { setupUserDashboard(); }
       } else {
         Swal.fire('Error', 'Incorrect Passcode', 'error');
       }
     }).loginUser(team, pass);
   }
 
-  function logout(){
-    location.reload();
-  }
+  function logout(){ location.reload(); }
 
-  // --- User Dashboard ---
   function setupUserDashboard(){
     document.getElementById('app-page').style.display = 'block';
-    document.getElementById('nav-team-name').innerText = 'Team: ' + currentTeam;
+    const navName = document.getElementById('nav-team-name');
+    if(navName) navName.innerText = 'Team: ' + currentTeam;
     loadJobs();
-    
-    // Setup Supervisor Dropdown
     const sel = document.getElementById('supervisor');
-    sel.innerHTML = '';
-    teamMembers.forEach(m => {
-       sel.innerHTML += `<option value="${m}">${m}</option>`;
-    });
+    if(sel){ sel.innerHTML = ''; teamMembers.forEach(m => { sel.innerHTML += `<option value="${m}">${m}</option>`; }); }
   }
 
   function loadJobs(){
@@ -55,226 +64,259 @@
   }
 
   function renderJobs(jobs){
-    currentJobs = jobs; // store for edit
+    currentJobs = jobs; 
     const container = document.getElementById('job-list-container');
+    if(!container) return;
     container.innerHTML = '';
     
-    let countProg = 0;
-    let countComp = 0;
-
+    let countProg = 0, countComp = 0;
     jobs.forEach(job => {
       if(job.Status === 'Completed') countComp++; else countProg++;
-      
-      // Check Logic: No WO -> Red Border
       const isNoWO = !job.WO_Number;
       const cardClass = isNoWO && job.Status !== 'Completed' ? 'card-job no-wo' : 'card-job';
       const badgeClass = job.Status === 'Completed' ? 'bg-success' : 'bg-warning text-dark';
       
       const html = `
         <div class="col-12 col-md-6 col-lg-4">
-          <div class="${cardClass} card shadow-sm h-100" onclick="editJob('${job.Job_ID}')">
+          <div class="${cardClass} card shadow-sm h-100" onclick="openModal('${job.Job_ID}')">
             <div class="card-body">
-               <div class="d-flex justify-content-between">
-                 <h6 class="fw-bold">${job.Description}</h6>
+               <div class="d-flex justify-content-between mb-2">
+                 <h6 class="fw-bold text-truncate" style="max-width: 70%;">${job.Description}</h6>
                  <span class="badge ${badgeClass}">${job.Status}</span>
                </div>
-               <div class="small text-muted mt-2">
-                 <i class="bi bi-person"></i> ${job.Supervisor} | 
-                 <i class="bi bi-upc"></i> ${job.WO_Number || '<span class="text-danger">No WO</span>'}
-               </div>
                <div class="small text-muted">
-                 <i class="bi bi-gear"></i> ${job.Contractor_Name} (${job.Contractor_Type})
+                 <i class="bi bi-person"></i> ${job.Supervisor} <br>
+                 <i class="bi bi-upc-scan"></i> ${job.WO_Number || '<span class="text-danger">No WO</span>'}
                </div>
-               <div class="mt-2" style="font-size:0.8rem">
-                 Time: ${job.Plan_Start} - ${job.Plan_Finish}
-                 ${job.Actual_Finish ? `<br><strong class="text-success">Done: ${job.Actual_Finish}</strong>` : ''}
+               <div class="mt-2 pt-2 border-top small d-flex justify-content-between text-secondary">
+                 <span><i class="bi bi-clock"></i> ${job.Plan_Start} - ${job.Plan_Finish}</span>
+                 <span>${job.Contractor_Name}</span>
                </div>
             </div>
           </div>
-        </div>
-      `;
+        </div>`;
       container.innerHTML += html;
     });
-
-    document.getElementById('count-progress').innerText = countProg;
-    document.getElementById('count-completed').innerText = countComp;
+    const progEl = document.getElementById('count-progress');
+    const compEl = document.getElementById('count-completed');
+    if(progEl) progEl.innerText = countProg;
+    if(compEl) compEl.innerText = countComp;
   }
 
-  // --- Modal Logic & Button State ---
-  
-  // เรียกใช้เมื่อเปิด Modal
+  // --- SPARE PART LOGIC ---
+  function addSpareRow(item='', qty='', price='') {
+    const tbody = document.getElementById('spare-list-body');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" class="sp-item" value="${item}" placeholder="Name"></td>
+      <td><input type="number" class="sp-qty" value="${qty}" placeholder="1" oninput="calcTotalCost()"></td>
+      <td><input type="number" class="sp-price" value="${price}" placeholder="0" oninput="calcTotalCost()"></td>
+      <td class="text-center align-middle"><i class="bi bi-x text-danger" style="cursor:pointer" onclick="removeSpareRow(this)"></i></td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  function removeSpareRow(btn) {
+    btn.closest('tr').remove();
+    calcTotalCost();
+  }
+
+  function calcTotalCost() {
+    let total = 0;
+    document.querySelectorAll('#spare-list-body tr').forEach(tr => {
+       const qty = parseFloat(tr.querySelector('.sp-qty').value) || 0;
+       const price = parseFloat(tr.querySelector('.sp-price').value) || 0;
+       total += (qty * price);
+    });
+    document.getElementById('externalCost').value = total > 0 ? total : '';
+  }
+
+  // --- MODAL LOGIC ---
   function openModal(jobId = null) {
-    myModal = new bootstrap.Modal(document.getElementById('jobModal'));
-    const form = document.getElementById('jobForm');
+    const modalEl = document.getElementById('jobModal');
+    if(!modalEl) return;
+    if(!myModal) myModal = new bootstrap.Modal(modalEl);
     
-    // Reset State
-    document.getElementById('close-job-section').style.display = 'none';
+    const form = document.getElementById('jobForm');
     document.getElementById('wo-warning').style.display = 'none';
     
+    // เคลียร์ตารางอะไหล่ก่อน
+    document.getElementById('spare-list-body').innerHTML = '';
+
     if(!jobId){
       // NEW JOB
       form.reset();
       document.getElementById('jobId').value = "";
       document.getElementById('modalTitle').innerText = "Create New Job";
-      // Set Default Time
       document.getElementById('planStart').value = "08:00";
       document.getElementById('planFinish').value = "17:00";
-      updateButtonState(); // Check WO Empty
+      
+      const statusInd = document.getElementById('status-indicator');
+      statusInd.className = "badge bg-secondary"; statusInd.innerText = "New";
+      
+      document.getElementById('btn-save').innerText = "Save & Dashboard";
+      document.getElementById('btn-confirm').style.display = 'none';
+      
+      // เพิ่มแถวว่าง 1 แถวเผื่อไว้
+      addSpareRow();
+      
     } else {
       // EDIT JOB
       const job = currentJobs.find(j => j.Job_ID == jobId);
       if(!job) return;
       
       document.getElementById('jobId').value = job.Job_ID;
-      document.getElementById('modalTitle').innerText = "Update / Close Job";
+      document.getElementById('modalTitle').innerText = "Job Detail / Update";
+      
+      document.getElementById('userId').value = job.User_ID || '';
       document.getElementById('supervisor').value = job.Supervisor;
       document.getElementById('woNumber').value = job.WO_Number;
       document.getElementById('description').value = job.Description;
-      document.getElementById('contractorType').value = job.Contractor_Type;
-      document.getElementById('contractorName').value = job.Contractor_Name;
+      
       document.getElementById('planStart').value = job.Plan_Start;
       document.getElementById('planFinish').value = job.Plan_Finish;
+      document.getElementById('actualStart').value = job.Actual_Start || '';
+      document.getElementById('actualFinish').value = job.Actual_Finish || '';
       
-      // Logic: Show Confirm Button if not completed
-      if(job.Status !== 'Completed'){
-         // เตรียมปิดงาน
-         document.getElementById('close-job-section').style.display = 'block';
-         document.getElementById('btn-action').className = "btn btn-success";
-         document.getElementById('btn-action').innerText = "Confirm Completed";
+      document.getElementById('contractorType').value = job.Contractor_Type;
+      document.getElementById('contractorName').value = job.Contractor_Name;
+      document.getElementById('contractorQty').value = job.Contractor_Qty || '';
+      
+      // Load Spare Parts (JSON or Text)
+      const partsData = job.Spare_Parts;
+      if(partsData) {
+         try {
+            const parts = JSON.parse(partsData);
+            if(Array.isArray(parts) && parts.length > 0) {
+               parts.forEach(p => addSpareRow(p.item, p.qty, p.price));
+            } else {
+               addSpareRow(partsData, 1, job.External_Cost); // กรณีข้อมูลเก่าเป็น Text
+            }
+         } catch(e) {
+            addSpareRow(partsData, 1, job.External_Cost); // กรณี Parse ไม่ผ่าน (Text ธรรมดา)
+         }
       } else {
-         // งานจบแล้ว ดูได้อย่างเดียว
-         document.getElementById('btn-action').innerText = "Update Info";
+         addSpareRow(); // ถ้าไม่มีข้อมูล ให้ขึ้นแถวว่าง
       }
+      
+      document.getElementById('externalCost').value = job.External_Cost || '';
+      
+      const isComp = job.Status === 'Completed';
+      const statusInd = document.getElementById('status-indicator');
+      statusInd.innerText = job.Status;
+      statusInd.className = isComp ? "badge bg-success" : "badge bg-warning text-dark";
+      
+      document.getElementById('btn-save').innerText = "Update Info";
+      document.getElementById('btn-confirm').style.display = isComp ? 'none' : 'inline-block';
+      
+      calcTotalCost(); // คำนวณยอดรวมใหม่ให้ชัวร์
     }
     
+    updateWOState();
     myModal.show();
   }
 
-  // Logic ปุ่มเปลี่ยนตามช่อง WO (Real-time)
-  document.getElementById('woNumber').addEventListener('keyup', updateButtonState);
+  document.getElementById('woNumber').addEventListener('keyup', updateWOState);
 
-  function updateButtonState(){
-    // ทำงานเฉพาะตอนเปิดงานใหม่ (ไม่มี Job ID)
-    if(document.getElementById('jobId').value !== "") return;
-
-    const wo = document.getElementById('woNumber').value;
-    const btn = document.getElementById('btn-action');
-    const warning = document.getElementById('wo-warning');
-
-    if(wo.trim() === ""){
-       btn.className = "btn btn-secondary"; // สีเทา
-       btn.innerText = "Create WO & Dashboard";
-       warning.style.display = 'block';
-    } else {
-       btn.className = "btn btn-primary"; // สีน้ำเงินปกติ
-       btn.innerText = "Save & Dashboard";
-       warning.style.display = 'none';
-    }
+  function updateWOState(){
+     const wo = document.getElementById('woNumber').value;
+     const warn = document.getElementById('wo-warning');
+     const btnSave = document.getElementById('btn-save');
+     
+     if(wo.trim() === ""){
+        warn.style.display = 'block';
+        if(btnSave.innerText.includes("Create")) {
+            btnSave.innerText = "Create WO & Dashboard";
+            btnSave.classList.remove('btn-primary'); btnSave.classList.add('btn-secondary');
+        }
+     } else {
+        warn.style.display = 'none';
+        if(btnSave.innerText.includes("Create")) {
+            btnSave.innerText = "Save & Dashboard";
+            btnSave.classList.remove('btn-secondary'); btnSave.classList.add('btn-primary');
+        }
+     }
   }
 
-  function submitJob(){
+  function submitJob(targetStatus){
     const jobId = document.getElementById('jobId').value;
-    const wo = document.getElementById('woNumber').value;
     const desc = document.getElementById('description').value;
-    
-    if(!desc) { Swal.fire('Alert','Please enter description','warning'); return; }
+    if(!desc) { Swal.fire('Required','Please enter Job Description','warning'); return; }
+
+    if(targetStatus === 'Completed'){
+       const actF = document.getElementById('actualFinish').value;
+       if(!actF) { Swal.fire('Required', 'Please enter Actual Finish Time to confirm.', 'warning'); return; }
+    }
+
+    // รวบรวมข้อมูล Spare Parts เป็น Array
+    const partsArray = [];
+    document.querySelectorAll('#spare-list-body tr').forEach(tr => {
+       const item = tr.querySelector('.sp-item').value;
+       const qty = tr.querySelector('.sp-qty').value;
+       const price = tr.querySelector('.sp-price').value;
+       if(item.trim() !== "") {
+          partsArray.push({ item: item, qty: qty, price: price });
+       }
+    });
 
     const formData = {
        jobId: jobId,
        team: currentTeam,
+       status: targetStatus,
+       userId: document.getElementById('userId').value,
        supervisor: document.getElementById('supervisor').value,
-       woNumber: wo,
+       planStart: document.getElementById('planStart').value,
+       planFinish: document.getElementById('planFinish').value,
+       actualStart: document.getElementById('actualStart').value,
+       actualFinish: document.getElementById('actualFinish').value,
+       woNumber: document.getElementById('woNumber').value,
        description: desc,
        contractorType: document.getElementById('contractorType').value,
        contractorName: document.getElementById('contractorName').value,
-       planStart: document.getElementById('planStart').value,
-       planFinish: document.getElementById('planFinish').value,
-       status: 'In Progress', // Default
-       actualFinish: ""
+       contractorQty: document.getElementById('contractorQty').value,
+       
+       // ส่งเป็น JSON String
+       spareParts: JSON.stringify(partsArray),
+       externalCost: document.getElementById('externalCost').value
     };
 
-    // ถ้าเป็นการปิดงาน (มี Job ID และส่วน Close แสดงอยู่)
-    const isClosing = document.getElementById('close-job-section').style.display !== 'none';
-    
-    if(jobId && isClosing){
-       const actTime = document.getElementById('actualFinish').value;
-       if(!actTime && document.getElementById('btn-action').innerText.includes("Confirm")){
-          Swal.fire('Required','Please enter Actual Finish Time','warning');
-          return;
-       }
-       formData.status = 'Completed';
-       formData.actualFinish = actTime;
-    }
-
-    // Send to Server
-    const btn = document.getElementById('btn-action');
+    const btn = targetStatus === 'Completed' ? document.getElementById('btn-confirm') : document.getElementById('btn-save');
     const orgText = btn.innerText;
-    btn.innerText = "Saving...";
-    btn.disabled = true;
+    btn.innerText = "Saving..."; btn.disabled = true;
 
     google.script.run.withSuccessHandler(res => {
-       btn.disabled = false;
-       btn.innerText = orgText;
+       btn.disabled = false; btn.innerText = orgText;
        if(res.success){
           myModal.hide();
-          Swal.fire({
-             icon: 'success',
-             title: 'Saved!',
-             toast: true,
-             position: 'top-end',
-             showConfirmButton: false,
-             timer: 1500
-          });
-          loadJobs(); // Refresh List
+          Swal.fire({ icon: 'success', title: 'Saved!', timer: 1500, showConfirmButton: false });
+          loadJobs(); 
        } else {
           Swal.fire('Error', res.error, 'error');
        }
     }).saveJob(formData);
   }
 
-  // --- TV Dashboard (Admin) ---
+  // --- TV DASHBOARD ---
   function setupTVDashboard(){
-    document.getElementById('tv-page').style.display = 'block';
-    refreshTV();
-    // Auto Refresh every 30 seconds
-    setInterval(refreshTV, 30000);
+    const tvPage = document.getElementById('tv-page');
+    if(tvPage) { tvPage.style.display = 'block'; refreshTV(); setInterval(refreshTV, 30000); }
   }
-
-  function refreshTV(){
-     google.script.run.withSuccessHandler(renderTV).getJobs('ADMIN');
-  }
-
+  function refreshTV(){ google.script.run.withSuccessHandler(renderTV).getJobs('ADMIN'); }
   function renderTV(jobs){
-     // Filter by Team and Render Table
-     renderTeamTable(jobs, 'ME1', 'tv-list-me1');
-     renderTeamTable(jobs, 'ME2', 'tv-list-me2');
-     renderTeamTable(jobs, 'ME3', 'tv-list-me3');
-     // Admin/Overview (แสดงงานทั้งหมดที่ยังไม่เสร็จ หรืองานเสร็จวันนี้)
-     renderTeamTable(jobs, 'ADMIN', 'tv-list-admin'); 
+     renderTeamTable(jobs, 'ME1', 'tv-list-me1'); renderTeamTable(jobs, 'ME2', 'tv-list-me2');
+     renderTeamTable(jobs, 'ME3', 'tv-list-me3'); renderTeamTable(jobs, 'ADMIN', 'tv-list-admin'); 
   }
-
   function renderTeamTable(allJobs, teamFilter, divId){
      const container = document.getElementById(divId);
+     if(!container) return;
      const filtered = teamFilter === 'ADMIN' ? allJobs : allJobs.filter(j => j.Team === teamFilter);
-     
-     if(filtered.length === 0) {
-        container.innerHTML = '<p class="text-muted text-center">No active jobs</p>';
-        return;
-     }
-
-     let html = '<table class="table table-sm table-striped" style="font-size:0.85rem">';
-     html += '<thead><tr><th>Desc</th><th>Contr.</th><th>Status</th></tr></thead><tbody>';
-     
+     if(filtered.length === 0) { container.innerHTML = '<p class="text-muted text-center mt-2">- No Jobs -</p>'; return; }
+     let html = '<table class="table table-sm table-striped" style="font-size:0.85rem"><tbody>';
      filtered.forEach(j => {
-        // Show max 5-6 items per screen to fit TV
         let statusColor = j.Status === 'Completed' ? 'text-success' : 'text-warning';
-        html += `<tr>
-           <td>${j.Description} ${!j.WO_Number ? '<span class="text-danger fw-bold">(!)</span>' : ''}</td>
-           <td>${j.Contractor_Name}</td>
-           <td class="${statusColor}">${j.Status}</td>
-        </tr>`;
+        let desc = j.Description.length > 20 ? j.Description.substring(0,20)+'...' : j.Description;
+        html += `<tr><td>${desc}</td><td class="${statusColor} text-end">${j.Status}</td></tr>`;
      });
-     html += '</tbody></table>';
-     container.innerHTML = html;
+     html += '</tbody></table>'; container.innerHTML = html;
   }
 </script>
